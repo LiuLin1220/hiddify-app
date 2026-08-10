@@ -475,11 +475,15 @@ android-aab-libs: android-libs
 
 windows-libs:
 	$(MKDIR) $(DESKTOP_OUT) || echo Folder already exists. Skipping...
+ifeq ($(CHANNEL),prod)
+	curl -L $(CORE_URL)/$(CORE_NAME)-windows-amd64.tar.gz | tar xz -C $(DESKTOP_OUT)/
+else
 	@test -n "$(CORE_WINDOWS_AMD64_SHA256)" || (echo "CORE_WINDOWS_AMD64_SHA256 is required" >&2; exit 1)
 	curl --fail --location --output "$(DESKTOP_OUT)/$(CORE_NAME)-windows-amd64.tar.gz" "$(CORE_URL)/$(CORE_NAME)-windows-amd64.tar.gz"
 	printf '%s  %s\n' "$(CORE_WINDOWS_AMD64_SHA256)" "$(DESKTOP_OUT)/$(CORE_NAME)-windows-amd64.tar.gz" | sha256sum --check -
 	tar xzf "$(DESKTOP_OUT)/$(CORE_NAME)-windows-amd64.tar.gz" -C "$(DESKTOP_OUT)/"
 	rm -f "$(DESKTOP_OUT)/$(CORE_NAME)-windows-amd64.tar.gz"
+endif
 	ls $(DESKTOP_OUT) || dir $(DESKTOP_OUT)/
 	
 
