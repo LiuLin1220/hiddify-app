@@ -1,0 +1,72 @@
+{
+  "rules": [
+    {
+      "list_order": 7,
+      "enabled": true,
+      "name": "complete-rule",
+      "outbound": "direct_with_fragment",
+      "rule_set": [
+        "geosite-google",
+        "geoip-private"
+      ],
+      "package_name": [
+        "com.example.browser"
+      ],
+      "process_name": [
+        "browser"
+      ],
+      "process_path": [
+        "/usr/bin/browser"
+      ],
+      "network": "udp",
+      "port_range": [
+        "443",
+        "1000:2000"
+      ],
+      "source_port_range": [
+        "53000:53999"
+      ],
+      "protocol": [
+        "tls",
+        "http",
+        "quic",
+        "stun",
+        "dns",
+        "bittorrent"
+      ],
+      "ip_cidr": [
+        "203.0.113.0/24",
+        "2001:db8::/32"
+      ],
+      "source_ip_cidr": [
+        "192.0.2.10/32"
+      ],
+      "domain": [
+        "accounts.example.com"
+      ],
+      "domain_suffix": [
+        "example.net"
+      ],
+      "domain_keyword": [
+        "telemetry"
+      ],
+      "domain_regex": [
+        "^api[0-9]+\\.example\\.org$"
+      ]
+    },
+    {
+      "list_order": 0,
+      "enabled": false,
+      "name": "",
+      "outbound": "proxy",
+      "network": "all",
+      "protocol": [
+        "tls"
+      ]
+    },
+    {
+      "name": "omitted-defaults"
+    },
+    {}
+  ]
+}
