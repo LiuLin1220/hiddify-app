@@ -52,7 +52,8 @@ LIB_NAME=hiddify-core
 ifeq ($(CHANNEL),prod)
 	CORE_URL=https://github.com/hiddify/hiddify-core/releases/download/v$(core.version)
 else
-	CORE_URL=https://github.com/LiuLin1220/hiddify-core/releases/download/v4.1.2-route-rule.1dev
+	CORE_URL=https://github.com/LiuLin1220/hiddify-core/releases/download/draft
+	CORE_WINDOWS_URL=https://github.com/LiuLin1220/hiddify-core/releases/download/v4.1.2-route-rule.1dev
 	CORE_WINDOWS_AMD64_SHA256=05c1f2ec707693e148a715dcd7bce2dddf03f763a690616341ab45b4a4fb03a3
 endif
 
@@ -479,7 +480,7 @@ ifeq ($(CHANNEL),prod)
 	curl -L $(CORE_URL)/$(CORE_NAME)-windows-amd64.tar.gz | tar xz -C $(DESKTOP_OUT)/
 else
 	@test -n "$(CORE_WINDOWS_AMD64_SHA256)" || (echo "CORE_WINDOWS_AMD64_SHA256 is required" >&2; exit 1)
-	curl --fail --location --output "$(DESKTOP_OUT)/$(CORE_NAME)-windows-amd64.tar.gz" "$(CORE_URL)/$(CORE_NAME)-windows-amd64.tar.gz"
+	curl --fail --location --output "$(DESKTOP_OUT)/$(CORE_NAME)-windows-amd64.tar.gz" "$(CORE_WINDOWS_URL)/$(CORE_NAME)-windows-amd64.tar.gz"
 	printf '%s  %s\n' "$(CORE_WINDOWS_AMD64_SHA256)" "$(DESKTOP_OUT)/$(CORE_NAME)-windows-amd64.tar.gz" | sha256sum --check -
 	tar xzf "$(DESKTOP_OUT)/$(CORE_NAME)-windows-amd64.tar.gz" -C "$(DESKTOP_OUT)/"
 	rm -f "$(DESKTOP_OUT)/$(CORE_NAME)-windows-amd64.tar.gz"
