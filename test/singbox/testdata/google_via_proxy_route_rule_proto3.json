@@ -1,0 +1,15 @@
+{
+  "rules": [
+    {
+      "enabled": true,
+      "name": "Google via proxy",
+      "outbound": "proxy",
+      "domain": [
+        "www.gstatic.com",
+        "fonts.googleapis.com",
+        "accounts.google.com",
+        "drive.google.com"
+      ]
+    }
+  ]
+}

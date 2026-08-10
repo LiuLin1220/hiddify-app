@@ -5,6 +5,7 @@ import "package:flutter_test/flutter_test.dart";
 import "package:hiddify/hiddifycore/generated/v2/config/route_rule.pb.dart";
 
 const _goldenPath = "test/singbox/testdata/route_rule_proto3.json";
+const _googleProxyGoldenPath = "test/singbox/testdata/google_via_proxy_route_rule_proto3.json";
 const _jsonEncoder = JsonEncoder.withIndent("  ");
 
 RouteRule _contractRouteRule() => RouteRule(
@@ -42,6 +43,17 @@ RouteRule _contractRouteRule() => RouteRule(
   ],
 );
 
+RouteRule _validGoogleProxyRouteRule() => RouteRule(
+  rules: [
+    Rule(
+      enabled: true,
+      name: "Google via proxy",
+      outbound: Outbound.proxy,
+      domains: ["www.gstatic.com", "fonts.googleapis.com", "accounts.google.com", "drive.google.com"],
+    ),
+  ],
+);
+
 Map<String, dynamic> _routeRuleJson(RouteRule routeRule) => routeRule.toProto3Json()! as Map<String, dynamic>;
 
 List<Map<String, dynamic>> _rules(Map<String, dynamic> routeRuleJson) =>
@@ -51,11 +63,27 @@ String _canonicalJson(Object? value) => "${_jsonEncoder.convert(value)}\n";
 
 void main() {
   group("RouteRule ProtoJSON contract", () {
-    test("matches the Core-consumable golden", () {
+    test("matches the exhaustive wire-contract golden", () {
       final actual = _canonicalJson(_routeRuleJson(_contractRouteRule()));
       final golden = File(_goldenPath).readAsStringSync();
 
       expect(actual, golden);
+    });
+
+    test("matches the semantically valid Google proxy golden", () {
+      final routeRuleJson = _routeRuleJson(_validGoogleProxyRouteRule());
+      final actual = _canonicalJson(routeRuleJson);
+      final golden = File(_googleProxyGoldenPath).readAsStringSync();
+
+      expect(actual, golden);
+      expect(_rules(routeRuleJson), [
+        {
+          "enabled": true,
+          "name": "Google via proxy",
+          "outbound": "proxy",
+          "domain": ["www.gstatic.com", "fonts.googleapis.com", "accounts.google.com", "drive.google.com"],
+        },
+      ]);
     });
 
     test("uses snake_case field names and string enum names", () {
