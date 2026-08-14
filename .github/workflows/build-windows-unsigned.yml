@@ -16,9 +16,12 @@ env:
   APP_SHA: ${{ github.sha }}
   CHANNEL: dev
   CORE_REPOSITORY: hiddify/hiddify-core
-  CORE_SHA: f2034de743b1ad775dba026f4e6e3c44cf7d9790
-  SINGBOX_SHA: 3a1c923e306d5b39cde8f2c02ec9dd556ea112d3
-  CRONET_GO_SHA: dc1cda1fe28740ba069934ab62aeb8ef85388332
+  CORE_SHA: db74dfc257d5becb4b4e9dbc7257a3dcdde20692
+  SINGBOX_SHA: 170d8315cab7a8695fd80469073ed2f1d07d63af
+  CRONET_GO_SHA: b3eec8134aec1387d850e0671dd8531e2e6140b0
+  LIBCRONET_SOURCE: https://github.com/hiddify/hiddify-core/releases/download/draft/hiddify-lib-windows-amd64.tar.gz
+  CORE_DRAFT_WINDOWS_SHA256: 6368ceff057b218e1ceca5e3be5809a11a994dbb4f2e5a4318e2c2dbd58be1a7
+  LIBCRONET_SHA256: c7434cfa93c3041321dd19111c4de6c52b8a9531a65661ba45425d3c51ec69e2
   FLUTTER_VERSION: '3.38.5'
   IS_GITHUB_ACTIONS: 1
   WINDOWS_ARTIFACT_NAME: hiddify-windows-${{ github.sha }}
@@ -102,6 +105,22 @@ jobs:
           export CODE_VERSION="-X github.com/hiddify/hiddify-core/v2/hcommon/constants.Version=${core_version} -X github.com/sagernet/sing-box/constant.Version=${singbox_version}"
           make windows-amd64
 
+      # The pinned sing-box source references an unadvertised cronet-go commit,
+      # and its Makefile does not propagate that intermediate command failure.
+      # Reuse the matching official draft runtime, pinned by archive and DLL hash.
+      - name: Restore pinned official libcronet runtime
+        shell: bash
+        working-directory: hiddify-core
+        run: |
+          archive="$RUNNER_TEMP/hiddify-lib-windows-amd64.tar.gz"
+          extract_dir="$RUNNER_TEMP/hiddify-core-draft"
+          curl --fail --location --retry 3 --output "$archive" "$LIBCRONET_SOURCE"
+          echo "$CORE_DRAFT_WINDOWS_SHA256  $archive" | sha256sum --check
+          mkdir -p "$extract_dir"
+          tar -xzf "$archive" -C "$extract_dir" ./libcronet.dll
+          install -m 0644 "$extract_dir/libcronet.dll" bin/libcronet.dll
+          echo "$LIBCRONET_SHA256  bin/libcronet.dll" | sha256sum --check
+
       - name: Verify exact core artifact
         shell: bash
         working-directory: hiddify-core
@@ -115,6 +134,9 @@ jobs:
             "core_sha=$CORE_SHA" \
             "singbox_sha=$SINGBOX_SHA" \
             "cronet_go_sha=$CRONET_GO_SHA" \
+            "libcronet_source=$LIBCRONET_SOURCE" \
+            "libcronet_archive_sha256=$CORE_DRAFT_WINDOWS_SHA256" \
+            "libcronet_sha256=$LIBCRONET_SHA256" \
             > bin/CORE-BUILD-PROVENANCE.txt
 
       - name: Upload exact core artifact
