@@ -1,0 +1,251 @@
+name: Build Windows unsigned
+
+on:
+  push:
+    branches:
+      - 'codex/build-windows-*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-windows-unsigned-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_SHA: ${{ github.sha }}
+  CHANNEL: dev
+  CORE_REPOSITORY: hiddify/hiddify-core
+  CORE_SHA: f2034de743b1ad775dba026f4e6e3c44cf7d9790
+  SINGBOX_SHA: 3a1c923e306d5b39cde8f2c02ec9dd556ea112d3
+  CRONET_GO_SHA: dc1cda1fe28740ba069934ab62aeb8ef85388332
+  FLUTTER_VERSION: '3.38.5'
+  IS_GITHUB_ACTIONS: 1
+  WINDOWS_ARTIFACT_NAME: hiddify-windows-${{ github.sha }}
+
+jobs:
+  app-tests:
+    if: github.repository == 'LiuLin1220/hiddify-app'
+    name: App tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout app source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.APP_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify app source
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$APP_SHA"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Prepare tests
+        run: make common-prepare
+
+      - name: Run tests
+        run: flutter test
+
+  build-core-windows:
+    if: github.repository == 'LiuLin1220/hiddify-app'
+    name: Build exact Windows core
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact core source recursively
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ env.CORE_REPOSITORY }}
+          ref: ${{ env.CORE_SHA }}
+          fetch-depth: 0
+          submodules: recursive
+          path: hiddify-core
+          persist-credentials: false
+
+      - name: Verify core dependency sources
+        shell: bash
+        run: |
+          actual_core="$(git -C hiddify-core rev-parse HEAD)"
+          actual_singbox="$(git -C hiddify-core/hiddify-sing-box rev-parse HEAD)"
+          actual_cronet="$(cat hiddify-core/hiddify-sing-box/.github/CRONET_GO_VERSION)"
+          test "$actual_core" = "$CORE_SHA"
+          test "$actual_singbox" = "$SINGBOX_SHA"
+          test "$actual_cronet" = "$CRONET_GO_SHA"
+          printf 'core=%s\nsingbox=%s\ncronet-go=%s\n' "$actual_core" "$actual_singbox" "$actual_cronet"
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: hiddify-core/go.mod
+          check-latest: false
+          cache-dependency-path: hiddify-core/go.sum
+
+      - name: Setup MinGW
+        uses: egor-tensin/setup-mingw@84c781b557efd538dec66bde06988d81cd3138cf # v2
+        with:
+          platform: x64
+
+      - name: Build Windows core
+        shell: bash
+        working-directory: hiddify-core
+        run: |
+          core_version="$(git describe --tags --always)"
+          singbox_version="$(git -C hiddify-sing-box describe --tags --always)"
+          export CODE_VERSION="-X github.com/hiddify/hiddify-core/v2/hcommon/constants.Version=${core_version} -X github.com/sagernet/sing-box/constant.Version=${singbox_version}"
+          make windows-amd64
+
+      - name: Verify exact core artifact
+        shell: bash
+        working-directory: hiddify-core
+        run: |
+          test -f bin/hiddify-core.dll
+          test -f bin/HiddifyCli.exe
+          test -f bin/libcronet.dll
+          sha256sum bin/hiddify-core.dll bin/HiddifyCli.exe bin/libcronet.dll
+          printf '%s\n' \
+            "core_repository=$CORE_REPOSITORY" \
+            "core_sha=$CORE_SHA" \
+            "singbox_sha=$SINGBOX_SHA" \
+            "cronet_go_sha=$CRONET_GO_SHA" \
+            > bin/CORE-BUILD-PROVENANCE.txt
+
+      - name: Upload exact core artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: exact-windows-core-${{ env.CORE_SHA }}
+          path: |
+            hiddify-core/bin/hiddify-core.dll
+            hiddify-core/bin/HiddifyCli.exe
+            hiddify-core/bin/libcronet.dll
+            hiddify-core/bin/CORE-BUILD-PROVENANCE.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  build-app-windows:
+    if: github.repository == 'LiuLin1220/hiddify-app'
+    name: Build portable ZIP and EXE installer
+    needs:
+      - app-tests
+      - build-core-windows
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout app source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.APP_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify app source
+        shell: pwsh
+        run: |
+          $actualApp = git rev-parse HEAD
+          if ($actualApp -ne $env:APP_SHA) {
+            throw "Unexpected app SHA: $actualApp"
+          }
+          Write-Output "app=$actualApp"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Install Windows packaging dependencies
+        shell: pwsh
+        run: |
+          make windows-install-deps
+          "$HOME/.pub-cache/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Prepare app without downloading a mutable core
+        run: make common-prepare
+
+      - name: Download exact Windows core
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: exact-windows-core-${{ env.CORE_SHA }}
+          path: hiddify-core/bin
+
+      - name: Verify injected Windows core
+        shell: pwsh
+        run: |
+          $required = @(
+            'hiddify-core/bin/hiddify-core.dll',
+            'hiddify-core/bin/HiddifyCli.exe',
+            'hiddify-core/bin/libcronet.dll'
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path -LiteralPath $file)) {
+              throw "Missing exact core file: $file"
+            }
+            Get-FileHash -LiteralPath $file -Algorithm SHA256
+          }
+
+      - name: Build unsigned Windows packages
+        shell: pwsh
+        env:
+          SENTRY_DSN: ''
+        run: |
+          make windows-zip-release
+          make windows-exe-release
+
+      - name: Stage packages and provenance
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path dist -Recurse -File | Select-Object FullName, Length
+
+          $zipFiles = @(Get-ChildItem -Path dist -Recurse -File -Filter '*.zip')
+          $exeFiles = @(Get-ChildItem -Path dist -Recurse -File -Filter '*.exe')
+          if ($zipFiles.Count -ne 1) {
+            throw "Expected exactly one portable ZIP, found $($zipFiles.Count)"
+          }
+          if ($exeFiles.Count -ne 1) {
+            throw "Expected exactly one installer EXE, found $($exeFiles.Count)"
+          }
+
+          New-Item -ItemType Directory -Path out -Force | Out-Null
+          Copy-Item -LiteralPath $zipFiles[0].FullName -Destination 'out/Hiddify-Windows-Portable-x64.zip'
+          Copy-Item -LiteralPath $exeFiles[0].FullName -Destination 'out/Hiddify-Windows-Setup-x64.exe'
+          Copy-Item -LiteralPath 'hiddify-core/bin/CORE-BUILD-PROVENANCE.txt' -Destination 'out/CORE-BUILD-PROVENANCE.txt'
+
+          $appParents = git show -s --format=%P HEAD
+          @"
+          app_repository=${{ github.repository }}
+          app_ref=${{ github.ref_name }}
+          app_sha=$env:APP_SHA
+          app_parents=$appParents
+          core_repository=$env:CORE_REPOSITORY
+          core_sha=$env:CORE_SHA
+          singbox_sha=$env:SINGBOX_SHA
+          cronet_go_sha=$env:CRONET_GO_SHA
+          flutter_version=$env:FLUTTER_VERSION
+          run_url=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          signing=unsigned
+          "@ | Set-Content -LiteralPath 'out/BUILD-PROVENANCE.txt' -Encoding utf8
+
+          $packages = @(Get-ChildItem -LiteralPath out -File | Where-Object { $_.Extension -in '.exe', '.zip' })
+          $hashLines = foreach ($package in $packages) {
+            $hash = Get-FileHash -LiteralPath $package.FullName -Algorithm SHA256
+            "$($hash.Hash.ToLowerInvariant()) *$($package.Name)"
+          }
+          $hashLines | Set-Content -LiteralPath 'out/SHA256SUMS.txt' -Encoding ascii
+          Get-Content -LiteralPath 'out/BUILD-PROVENANCE.txt'
+          Get-Content -LiteralPath 'out/SHA256SUMS.txt'
+
+      - name: Upload complete Windows packages
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: ${{ env.WINDOWS_ARTIFACT_NAME }}
+          path: out
+          if-no-files-found: error
+          retention-days: 7

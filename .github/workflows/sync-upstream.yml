@@ -1,0 +1,44 @@
+name: Sync upstream main
+
+on:
+  schedule:
+    - cron: '37 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-main-to-windows-build-base
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'LiuLin1220/hiddify-app' && github.ref == 'refs/heads/codex/windows-build-base'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout build base
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: codex/windows-build-base
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Merge upstream main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add upstream https://github.com/hiddify/hiddify-app.git
+          git fetch --no-tags upstream refs/heads/main:refs/remotes/upstream/main
+
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo 'Already contains upstream/main'
+            exit 0
+          fi
+
+          git merge --no-edit upstream/main
+          git merge-base --is-ancestor upstream/main HEAD
+          git push origin HEAD:refs/heads/codex/windows-build-base
