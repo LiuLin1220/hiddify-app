@@ -18,6 +18,7 @@ import 'package:hiddify/features/app/widget/app.dart';
 import 'package:hiddify/features/auto_start/notifier/auto_start_notifier.dart';
 import 'package:hiddify/features/chain/model/chain_enum.dart';
 import 'package:hiddify/features/chain/notifier/chain_profile_notifier.dart';
+import 'package:hiddify/features/connection/notifier/connection_notifier.dart';
 
 import 'package:hiddify/features/log/data/log_data_providers.dart';
 import 'package:hiddify/features/profile/data/profile_data_providers.dart';
@@ -132,10 +133,32 @@ Future<void> lazyBootstrap(WidgetsBinding widgetsBinding, Environment env) async
     ),
   );
 
+  if (PlatformUtils.isDesktop) {
+    unawaited(_restoreDesktopConnection(container));
+  }
+
   if (!kIsWeb) {
     FlutterNativeSplash.remove();
   }
   // SentryFlutter.s(DateTime.now().toUtc());
+}
+
+Future<void> _restoreDesktopConnection(ProviderContainer container) async {
+  if (!container.read(Preferences.startedByUser)) return;
+
+  try {
+    final status = await container.read(connectionNotifierProvider.future).timeout(const Duration(seconds: 10));
+
+    if (!container.read(Preferences.startedByUser) || !status.canRestoreConnection) {
+      Logger.bootstrap.debug("desktop connection restore skipped for [${status.format()}]");
+      return;
+    }
+
+    Logger.bootstrap.info("restoring previous desktop connection");
+    await container.read(connectionNotifierProvider.notifier).mayConnect();
+  } catch (error, stackTrace) {
+    Logger.bootstrap.warning("desktop connection restore failed", error, stackTrace);
+  }
 }
 
 Future<T> _init<T>(String name, Future<T> Function() initializer, {int? timeout}) async {
