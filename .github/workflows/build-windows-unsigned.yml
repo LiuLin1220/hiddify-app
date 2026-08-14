@@ -221,6 +221,78 @@ jobs:
           make windows-zip-release
           make windows-exe-release
 
+      # The upstream Makefile uses `tar -a` to create the portable .zip. GNU tar
+      # accepts that command but emits a plain tar archive, so normalize it on
+      # runners where the result is not actually readable as ZIP.
+      - name: Normalize and verify portable ZIP
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+          $zipFiles = @(Get-ChildItem -Path dist -Recurse -File -Filter '*.zip')
+          if ($zipFiles.Count -ne 1) {
+            throw "Expected exactly one portable ZIP, found $($zipFiles.Count)"
+          }
+          $zipPath = $zipFiles[0].FullName
+
+          $archive = $null
+          $isReadableZip = $false
+          try {
+            $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+            $isReadableZip = $archive.Entries.Count -gt 0
+          }
+          catch {
+            Write-Host "Portable output is not a readable ZIP; repacking the tar payload."
+          }
+          finally {
+            if ($null -ne $archive) {
+              $archive.Dispose()
+            }
+          }
+
+          if (-not $isReadableZip) {
+            $extractRoot = Join-Path $env:RUNNER_TEMP "hiddify-portable-$env:GITHUB_RUN_ATTEMPT"
+            $replacementZip = Join-Path $env:RUNNER_TEMP "hiddify-portable-$env:GITHUB_RUN_ATTEMPT.zip"
+            if ((Test-Path -LiteralPath $extractRoot) -or (Test-Path -LiteralPath $replacementZip)) {
+              throw "Portable repack paths unexpectedly already exist"
+            }
+            New-Item -ItemType Directory -Path $extractRoot | Out-Null
+            & tar.exe -xf $zipPath -C $extractRoot
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not extract the portable tar payload"
+            }
+            if (-not (Test-Path -LiteralPath (Join-Path $extractRoot 'Hiddify') -PathType Container)) {
+              throw "Portable payload does not contain the Hiddify root directory"
+            }
+            [System.IO.Compression.ZipFile]::CreateFromDirectory(
+              $extractRoot,
+              $replacementZip,
+              [System.IO.Compression.CompressionLevel]::Optimal,
+              $false
+            )
+            Copy-Item -LiteralPath $replacementZip -Destination $zipPath -Force
+          }
+
+          $requiredEntries = @(
+            'Hiddify/Hiddify.exe',
+            'Hiddify/hiddify-core.dll',
+            'Hiddify/HiddifyCli.exe',
+            'Hiddify/libcronet.dll'
+          )
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+          try {
+            $entryNames = @($archive.Entries | ForEach-Object FullName)
+            foreach ($entry in $requiredEntries) {
+              if ($entryNames -notcontains $entry) {
+                throw "Portable ZIP is missing required entry: $entry"
+              }
+            }
+            Write-Host "Verified portable ZIP with $($archive.Entries.Count) entries"
+          }
+          finally {
+            $archive.Dispose()
+          }
+
       - name: Stage packages and provenance
         shell: pwsh
         run: |
@@ -240,12 +312,26 @@ jobs:
           Copy-Item -LiteralPath $exeFiles[0].FullName -Destination 'out/Hiddify-Windows-Setup-x64.exe'
           Copy-Item -LiteralPath 'hiddify-core/bin/CORE-BUILD-PROVENANCE.txt' -Destination 'out/CORE-BUILD-PROVENANCE.txt'
 
-          $appParents = git show -s --format=%P HEAD
+          $rawCommit = git cat-file -p HEAD
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not read the app commit object"
+          }
+          $appParents = @(
+            $rawCommit | ForEach-Object {
+              if ($_ -match '^parent ([0-9a-f]{40})$') {
+                $Matches[1]
+              }
+            }
+          )
+          if ($appParents.Count -ne 2) {
+            throw "Expected the build integration commit to have exactly two parents, found $($appParents.Count)"
+          }
+          $appParentList = $appParents -join ' '
           @"
           app_repository=${{ github.repository }}
           app_ref=${{ github.ref_name }}
           app_sha=$env:APP_SHA
-          app_parents=$appParents
+          app_parents=$appParentList
           core_repository=$env:CORE_REPOSITORY
           core_sha=$env:CORE_SHA
           singbox_sha=$env:SINGBOX_SHA
