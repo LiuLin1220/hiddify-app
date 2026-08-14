@@ -38,7 +38,7 @@ class HiddifyCoreService with InfraLogger {
 
   CoreStatus currentState = const CoreStatus.stopped();
   final statusController = BehaviorSubject<CoreStatus>();
-  final logController = BehaviorSubject<List<LogMessage>>();
+  final logController = BehaviorSubject<List<LogMessage>>.seeded(const []);
   final CallOptions? grpcOptions = null; //CallOptions(timeout: const Duration(milliseconds: 10000));
   final Map<String, StreamSubscription?> subscriptions = {};
   List<OutboundGroup> latest = [];
@@ -366,6 +366,7 @@ class HiddifyCoreService with InfraLogger {
   // SingboxConfigOption? latestOptions;
 
   Stream<List<LogMessage>> watchLogs(String path) async* {
+    yield List<LogMessage>.unmodifiable(logBuffer);
     if (!core.isInitialized()) {
       loggy.debug("core is not initialized, returning empty log stream");
       return;
@@ -401,6 +402,7 @@ class HiddifyCoreService with InfraLogger {
     return TaskEither(() async {
       loggy.debug("clearing logs");
       logBuffer.clear();
+      logController.add(const []);
       // final res = await core.bgClient(Empty());
       // if (res.code != ResponseCode.OK) return left("${res.code} ${res.message}");
       return right(unit);
@@ -485,7 +487,7 @@ class HiddifyCoreService with InfraLogger {
         if (logBuffer.length > 300) {
           logBuffer.removeAt(0);
         }
-        logController.add(logBuffer);
+        logController.add(List<LogMessage>.unmodifiable(logBuffer));
         // loggy.log(getLogLevel(event.level), event.message);
         event.message.split('\n').forEach((line) {
           loggy.log(getLogLevel(event.level), line);
