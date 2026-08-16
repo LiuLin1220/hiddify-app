@@ -26,19 +26,28 @@ import 'package:hiddify/utils/custom_loggers.dart';
 import 'package:hiddify/utils/platform_utils.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:loggy/loggy.dart' as loggyl;
+import 'package:meta/meta.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:rxdart/rxdart.dart';
 
 class HiddifyCoreService with InfraLogger {
-  HiddifyCoreService(this.ref);
+  HiddifyCoreService(this.ref, {CoreInterface? coreInterface}) : core = coreInterface ?? getCoreInterface() {
+    // Setup can fail before bootstrap starts awaiting this future. Keep an error handler attached so that the cached
+    // failure is not reported as an unhandled asynchronous error; later awaiters still receive the error.
+    firstReportedCoreStatus.ignore();
+  }
+
   final Ref ref;
 
   // CoreHiddifyCoreService() {}
-  final core = getCoreInterface();
+  final CoreInterface core;
+
+  final _firstReportedCoreStatusCompleter = Completer<CoreStatus>();
+  late final Future<CoreStatus> firstReportedCoreStatus = _firstReportedCoreStatusCompleter.future;
 
   CoreStatus currentState = const CoreStatus.stopped();
   final statusController = BehaviorSubject<CoreStatus>();
-  final logController = BehaviorSubject<List<LogMessage>>();
+  final logController = BehaviorSubject<List<LogMessage>>.seeded(const []);
   final CallOptions? grpcOptions = null; //CallOptions(timeout: const Duration(milliseconds: 10000));
   final Map<String, StreamSubscription?> subscriptions = {};
   List<OutboundGroup> latest = [];
@@ -94,6 +103,7 @@ class HiddifyCoreService with InfraLogger {
         final setupResponse = await core.setup(directories, debug, 3);
 
         if (setupResponse.isNotEmpty) {
+          _failFirstReportedCoreStatus(StateError(setupResponse));
           return left(setupResponse);
         }
 
@@ -106,7 +116,8 @@ class HiddifyCoreService with InfraLogger {
         await startListeningStatus("bg", core.bgClient);
         // ref.read(coreRestartSignalProvider.notifier).restart();
         return right(unit);
-      } catch (e) {
+      } catch (e, stackTrace) {
+        _failFirstReportedCoreStatus(e, stackTrace);
         return left(e.toString());
       }
     });
@@ -367,11 +378,11 @@ class HiddifyCoreService with InfraLogger {
 
   Stream<List<LogMessage>> watchLogs(String path) async* {
     if (!core.isInitialized()) {
-      loggy.debug("core is not initialized, returning empty log stream");
-      return;
+      loggy.debug("core is not initialized, waiting for log snapshots");
+    } else {
+      await startListeningLogs("bg", core.bgClient);
+      await startListeningLogs("fg", core.fgClient);
     }
-    await startListeningLogs("bg", core.bgClient);
-    await startListeningLogs("fg", core.fgClient);
     try {
       yield* logController.stream;
     } catch (e) {
@@ -401,6 +412,7 @@ class HiddifyCoreService with InfraLogger {
     return TaskEither(() async {
       loggy.debug("clearing logs");
       logBuffer.clear();
+      logController.add(const []);
       // final res = await core.bgClient(Empty());
       // if (res.code != ResponseCode.OK) return left("${res.code} ${res.message}");
       return right(unit);
@@ -439,38 +451,62 @@ class HiddifyCoreService with InfraLogger {
   }
 
   Future<void> startListeningStatus(String key, CoreClient cc) async {
-    await listenSingle<CoreStatus>(
-      "${key}StatusListener",
-      () => cc
-          .coreInfoListener(Empty(), options: grpcOptions)
-          .doOnCancel(() {
-            loggy.error("status", "Canceld");
-            if (currentState == const CoreStatus.started()) currentState = const CoreStatus.stopped();
-          })
-          .doOnData((event) {
-            loggy.debug("status", event);
-            if (currentState == const CoreStatus.started()) currentState = const CoreStatus.stopped();
-          })
-          .doOnDone(() {
-            loggy.error("status", "done");
-            if (currentState == const CoreStatus.started()) currentState = const CoreStatus.stopped();
-          })
-          .endWith(CoreInfoResponse(coreState: CoreStates.STOPPED))
-          .map((event) {
-            currentState = CoreStatus.fromCoreInfo(event);
-            statusController.add(currentState);
-            return currentState;
-          }),
-      // .endWith(const CoreStatus.stopped())
-      onError: (error) {
-        loggy.error("Stream error in ${key}StatusListener: $error");
+    await startListeningStatusStream(key, () => cc.coreInfoListener(Empty(), options: grpcOptions));
+  }
 
-        // currentState = const CoreStatus.stopped();
-        // statusController.add(currentState);
+  @visibleForTesting
+  Future<void> startListeningStatusStream(String key, Stream<CoreInfoResponse> Function() statusStream) async {
+    try {
+      await listenSingle<CoreStatus>(
+        "${key}StatusListener",
+        () => statusStream()
+            .doOnCancel(() {
+              loggy.error("status", "Canceld");
+              if (currentState == const CoreStatus.started()) currentState = const CoreStatus.stopped();
+            })
+            .doOnData((event) {
+              loggy.debug("status", event);
+              _reportFirstCoreStatus(CoreStatus.fromCoreInfo(event));
+              if (currentState == const CoreStatus.started()) currentState = const CoreStatus.stopped();
+            })
+            .doOnDone(() {
+              loggy.error("status", "done");
+              _failFirstReportedCoreStatus(StateError("core status listener ended before reporting a status"));
+              if (currentState == const CoreStatus.started()) currentState = const CoreStatus.stopped();
+            })
+            .endWith(CoreInfoResponse(coreState: CoreStates.STOPPED))
+            .map((event) {
+              currentState = CoreStatus.fromCoreInfo(event);
+              statusController.add(currentState);
+              return currentState;
+            }),
+        // .endWith(const CoreStatus.stopped())
+        onError: (error, stackTrace) {
+          loggy.error("Stream error in ${key}StatusListener: $error");
+          _failFirstReportedCoreStatus(error, stackTrace);
 
-        // startListeningStatus(key, cc);
-      },
-    );
+          // currentState = const CoreStatus.stopped();
+          // statusController.add(currentState);
+
+          // startListeningStatus(key, cc);
+        },
+      );
+    } catch (error, stackTrace) {
+      _failFirstReportedCoreStatus(error, stackTrace);
+      rethrow;
+    }
+  }
+
+  void _reportFirstCoreStatus(CoreStatus status) {
+    if (!_firstReportedCoreStatusCompleter.isCompleted) {
+      _firstReportedCoreStatusCompleter.complete(status);
+    }
+  }
+
+  void _failFirstReportedCoreStatus(Object error, [StackTrace? stackTrace]) {
+    if (!_firstReportedCoreStatusCompleter.isCompleted) {
+      _firstReportedCoreStatusCompleter.completeError(error, stackTrace ?? StackTrace.current);
+    }
   }
 
   Future<void> startListeningLogs(String key, CoreClient cc) async {
@@ -485,7 +521,7 @@ class HiddifyCoreService with InfraLogger {
         if (logBuffer.length > 300) {
           logBuffer.removeAt(0);
         }
-        logController.add(logBuffer);
+        logController.add(List<LogMessage>.unmodifiable(logBuffer));
         // loggy.log(getLogLevel(event.level), event.message);
         event.message.split('\n').forEach((line) {
           loggy.log(getLogLevel(event.level), line);
@@ -514,7 +550,7 @@ class HiddifyCoreService with InfraLogger {
   Future<StreamSubscription<T>?> listenSingle<T>(
     String key,
     Stream<T> Function() stream, {
-    Function(dynamic error)? onError,
+    void Function(Object error, StackTrace stackTrace)? onError,
   }) async {
     if (subscriptions.containsKey(key)) {
       // return subscriptions[key] as StreamSubscription<T>?;
@@ -526,9 +562,9 @@ class HiddifyCoreService with InfraLogger {
         // loggy.debug(event);
       },
       cancelOnError: true,
-      onError: (error) {
+      onError: (Object error, StackTrace stackTrace) {
         loggy.log(loggyl.LogLevel.error, 'Stream error: $error');
-        onError?.call(error);
+        onError?.call(error, stackTrace);
         subscriptions[key]?.cancel();
         subscriptions.remove(key);
       },
