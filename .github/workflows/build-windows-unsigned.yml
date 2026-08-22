@@ -15,8 +15,8 @@ concurrency:
 env:
   APP_SHA: ${{ github.sha }}
   CHANNEL: dev
-  CORE_REPOSITORY: hiddify/hiddify-core
-  CORE_SHA: db74dfc257d5becb4b4e9dbc7257a3dcdde20692
+  CORE_REPOSITORY: LiuLin1220/hiddify-core
+  CORE_SHA: 9a25b85ed97f0416ec38e0e9823a23ecb61f35b1
   SINGBOX_SHA: 170d8315cab7a8695fd80469073ed2f1d07d63af
   CRONET_GO_SHA: b3eec8134aec1387d850e0671dd8531e2e6140b0
   LIBCRONET_SOURCE: https://github.com/hiddify/hiddify-core/releases/download/draft/hiddify-lib-windows-amd64.tar.gz
@@ -95,6 +95,13 @@ jobs:
         uses: egor-tensin/setup-mingw@84c781b557efd538dec66bde06988d81cd3138cf # v2
         with:
           platform: x64
+
+      - name: Test Core DNS startup regression
+        shell: bash
+        working-directory: hiddify-core
+        run: >-
+          go test -count=1 ./v2/config -run
+          'TestBuildConfigStartsWithDirectDNSTransports|TestRawDNSDetourToEmptyDirectOutboundIsRejected'
 
       - name: Build Windows core
         shell: bash
