@@ -114,7 +114,19 @@ jobs:
           icon_path="$app/Contents/Resources/${icon_name%.icns}.icns"
           iconutil --convert iconset --output "$RUNNER_TEMP/verified-app-icon.iconset" "$icon_path"
           mkdir -p out
-          cp "$RUNNER_TEMP/verified-app-icon.iconset/icon_512x512@2x.png" out/AppIcon-preview.png
+          python3 - <<'PY'
+          import os, shutil, struct
+          from pathlib import Path
+          images = list((Path(os.environ['RUNNER_TEMP']) / 'verified-app-icon.iconset').glob('*.png'))
+          if not images:
+              raise SystemExit('Compiled app icon did not decode to any PNG images')
+          def area(path):
+              width, height = struct.unpack('>II', path.read_bytes()[16:24])
+              return width * height
+          preview = max(images, key=area)
+          print(f'Exporting largest decoded icon: {preview.name}')
+          shutil.copy2(preview, 'out/AppIcon-preview.png')
+          PY
           python3 - <<'PY'
           import ctypes
           ctypes.CDLL('build/macos/Build/Products/Release/Hiddify.app/Contents/Frameworks/hiddify-core.dylib')
