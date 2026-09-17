@@ -1,0 +1,147 @@
+name: Build macOS personal
+
+on:
+  push:
+    branches:
+      - 'codex/build-macos-*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-macos-personal-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_SHA: ${{ github.sha }}
+  CHANNEL: dev
+  CORE_REPOSITORY: LiuLin1220/hiddify-core
+  CORE_SHA: 9a25b85ed97f0416ec38e0e9823a23ecb61f35b1
+  SINGBOX_SHA: 170d8315cab7a8695fd80469073ed2f1d07d63af
+  FLUTTER_VERSION: '3.38.5'
+  IS_GITHUB_ACTIONS: 1
+  SENTRY_DSN: ''
+
+jobs:
+  app-tests:
+    if: github.repository == 'LiuLin1220/hiddify-app'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: make common-prepare
+      - run: flutter test
+
+  build-macos:
+    if: github.repository == 'LiuLin1220/hiddify-app'
+    runs-on: macos-15
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Checkout exact personal core
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ env.CORE_REPOSITORY }}
+          ref: ${{ env.CORE_SHA }}
+          submodules: recursive
+          path: hiddify-core
+          persist-credentials: false
+      - name: Verify sources and build environment
+        run: |
+          test "$(git rev-parse HEAD)" = "$APP_SHA"
+          test "$(git -C hiddify-core rev-parse HEAD)" = "$CORE_SHA"
+          test "$(git -C hiddify-core/hiddify-sing-box rev-parse HEAD)" = "$SINGBOX_SHA"
+          uname -m
+          xcodebuild -version
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: hiddify-core/go.mod
+          cache-dependency-path: hiddify-core/go.sum
+      - name: Test Core DNS startup regression
+        working-directory: hiddify-core
+        run: >-
+          go test -count=1 -tags tfogo_checklinkname0
+          -ldflags '-checklinkname=0' ./v2/config -run
+          'TestBuildConfigStartsWithDirectDNSTransports|TestRawDNSDetourToEmptyDirectOutboundIsRejected'
+      - name: Build universal Core with the existing Makefile
+        working-directory: hiddify-core
+        env:
+          GOFLAGS: '-ldflags=-checklinkname=0'
+        run: |
+          make macos SHELL=/bin/bash '.SHELLFLAGS=-e -o pipefail -c'
+          lipo -verify_arch arm64 x86_64 bin/hiddify-core.dylib
+          otool -L bin/hiddify-core.dylib
+      - uses: subosito/flutter-action@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Install existing macOS packaging dependencies
+        run: |
+          make macos-install-deps
+          echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
+      - name: Prepare app without replacing the exact Core
+        run: make common-prepare
+      - name: Build existing DMG and PKG targets
+        run: make macos-release
+      - name: Verify app architecture and signature
+        run: |
+          app=build/macos/Build/Products/Release/Hiddify.app
+          test -d "$app"
+          lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/Hiddify"
+          lipo -verify_arch arm64 x86_64 "$app/Contents/Frameworks/hiddify-core.dylib"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv "$app" 2>&1
+          python3 - <<'PY'
+          import ctypes
+          ctypes.CDLL('build/macos/Build/Products/Release/Hiddify.app/Contents/Frameworks/hiddify-core.dylib')
+          print('Packaged Core loads successfully on the macOS runner')
+          PY
+      - name: Stage and verify packages
+        run: |
+          mkdir -p out
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+          for extension in ('dmg', 'pkg'):
+              files = list(Path('dist').rglob('*.' + extension))
+              if len(files) != 1:
+                  raise SystemExit(f'Expected one {extension}, found {files}')
+              shutil.copy2(files[0], f'out/Hiddify-MacOS-Universal.{extension}')
+          PY
+          hdiutil verify out/Hiddify-MacOS-Universal.dmg
+          pkgutil --payload-files out/Hiddify-MacOS-Universal.pkg > "$RUNNER_TEMP/pkg-payload.txt"
+          grep 'Hiddify.app/Contents/MacOS/Hiddify' "$RUNNER_TEMP/pkg-payload.txt"
+          printf '%s\n' \
+            "app_repository=${{ github.repository }}" \
+            "app_sha=$APP_SHA" \
+            "core_repository=$CORE_REPOSITORY" \
+            "core_sha=$CORE_SHA" \
+            "singbox_sha=$SINGBOX_SHA" \
+            "flutter_version=$FLUTTER_VERSION" \
+            'architectures=arm64,x86_64' \
+            'signing=ad-hoc; not notarized' \
+            "run_url=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            > out/BUILD-PROVENANCE.txt
+          (cd out && shasum -a 256 *.dmg *.pkg > SHA256SUMS.txt)
+          cat out/BUILD-PROVENANCE.txt out/SHA256SUMS.txt
+      - name: Upload macOS packages
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: hiddify-macos-${{ github.sha }}
+          path: out
+          if-no-files-found: error
+          retention-days: 14
