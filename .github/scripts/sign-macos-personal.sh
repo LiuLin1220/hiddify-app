@@ -7,7 +7,7 @@ app=build/macos/Build/Products/Release/Hiddify.app
 helper="$app/Contents/Library/LoginItems/LaunchAtLoginHelper.app"
 test -d "$helper"
 codesign --force --sign - --timestamp=none \
-  --preserve-metadata=identifier,entitlements,flags "$helper"
+  --preserve-metadata=entitlements,flags "$helper"
 
 # The pinned Cronet static libraries were built for macOS 12.0.
 /usr/libexec/PlistBuddy -c 'Set :LSMinimumSystemVersion 12.0' "$app/Contents/Info.plist"
