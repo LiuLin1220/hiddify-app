@@ -82,7 +82,7 @@ jobs:
           GOFLAGS: '-ldflags=-checklinkname=0'
         run: |
           make macos SHELL=/bin/bash '.SHELLFLAGS=-e -o pipefail -c'
-          lipo -verify_arch arm64 x86_64 bin/hiddify-core.dylib
+          lipo bin/hiddify-core.dylib -verify_arch arm64 x86_64
           otool -L bin/hiddify-core.dylib
       - uses: subosito/flutter-action@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0
         with:
@@ -101,8 +101,8 @@ jobs:
         run: |
           app=build/macos/Build/Products/Release/Hiddify.app
           test -d "$app"
-          lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/Hiddify"
-          lipo -verify_arch arm64 x86_64 "$app/Contents/Frameworks/hiddify-core.dylib"
+          lipo "$app/Contents/MacOS/Hiddify" -verify_arch arm64 x86_64
+          lipo "$app/Contents/Frameworks/hiddify-core.dylib" -verify_arch arm64 x86_64
           codesign --verify --deep --strict --verbose=2 "$app"
           codesign -dv "$app" 2>&1
           python3 - <<'PY'
