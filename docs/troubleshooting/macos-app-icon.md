@@ -2,6 +2,8 @@
 
 适用于本 fork 的 macOS 个人构建。本文记录 2026-09-17 的一次实际故障，供后续发布和排障复用；不是针对所有 macOS 设备的通用修复脚本。
 
+关联：[故障记录 #1](https://github.com/LiuLin1220/hiddify-app/issues/1) · [代码集成 PR #2](https://github.com/LiuLin1220/hiddify-app/pull/2)。Issue 的解决状态与 PR 的合并状态分别维护。
+
 ## 结论与证据边界
 
 这次存在两个独立问题：
