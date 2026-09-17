@@ -109,6 +109,12 @@ jobs:
           lipo "$app/Contents/Frameworks/hiddify-core.dylib" -verify_arch arm64 x86_64
           codesign --verify --deep --strict --verbose=2 "$app"
           codesign -dv "$app" 2>&1
+          python3 .github/scripts/verify-macos-icon.py "$app"
+          icon_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$app/Contents/Info.plist")"
+          icon_path="$app/Contents/Resources/${icon_name%.icns}.icns"
+          iconutil --convert iconset --output "$RUNNER_TEMP/verified-app-icon.iconset" "$icon_path"
+          mkdir -p out
+          cp "$RUNNER_TEMP/verified-app-icon.iconset/icon_512x512@2x.png" out/AppIcon-preview.png
           python3 - <<'PY'
           import ctypes
           ctypes.CDLL('build/macos/Build/Products/Release/Hiddify.app/Contents/Frameworks/hiddify-core.dylib')
@@ -132,6 +138,7 @@ jobs:
           hdiutil attach -readonly -nobrowse -mountpoint "$mount_point" out/Hiddify-MacOS-Universal.dmg
           trap 'hdiutil detach "$mount_point"' EXIT
           codesign --verify --deep --strict --verbose=2 "$mount_point/Hiddify.app"
+          python3 .github/scripts/verify-macos-icon.py "$mount_point/Hiddify.app"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$mount_point/Hiddify.app/Contents/Info.plist")" = '12.0'
           hdiutil detach "$mount_point"
           trap - EXIT
