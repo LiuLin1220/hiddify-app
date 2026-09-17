@@ -96,7 +96,11 @@ jobs:
       - name: Prepare app without replacing the exact Core
         run: make common-prepare
       - name: Build existing DMG and PKG targets
-        run: make macos-release
+        run: >-
+          make macos-release
+          DISTRIBUTOR_ARGS='--skip-clean --build-target lib/main.dart
+          --build-dart-define sentry_dsn=
+          --hook-pre "bash .github/scripts/sign-macos-personal.sh"'
       - name: Verify app architecture and signature
         run: |
           app=build/macos/Build/Products/Release/Hiddify.app
@@ -123,6 +127,14 @@ jobs:
               shutil.copy2(files[0], f'out/Hiddify-MacOS-Universal.{extension}')
           PY
           hdiutil verify out/Hiddify-MacOS-Universal.dmg
+          mount_point="$RUNNER_TEMP/hiddify-dmg-check"
+          mkdir -p "$mount_point"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount_point" out/Hiddify-MacOS-Universal.dmg
+          trap 'hdiutil detach "$mount_point"' EXIT
+          codesign --verify --deep --strict --verbose=2 "$mount_point/Hiddify.app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$mount_point/Hiddify.app/Contents/Info.plist")" = '12.0'
+          hdiutil detach "$mount_point"
+          trap - EXIT
           pkgutil --payload-files out/Hiddify-MacOS-Universal.pkg > "$RUNNER_TEMP/pkg-payload.txt"
           grep 'Hiddify.app/Contents/MacOS/Hiddify' "$RUNNER_TEMP/pkg-payload.txt"
           printf '%s\n' \
@@ -133,6 +145,7 @@ jobs:
             "singbox_sha=$SINGBOX_SHA" \
             "flutter_version=$FLUTTER_VERSION" \
             'architectures=arm64,x86_64' \
+            'minimum_macos=12.0' \
             'signing=ad-hoc; not notarized' \
             "run_url=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             > out/BUILD-PROVENANCE.txt
